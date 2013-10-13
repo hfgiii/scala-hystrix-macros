@@ -47,62 +47,99 @@ object hystrixMacro {
       else if (strName == "String") q""" "Huh?"  """
       else  q"""null.asInstanceOf[$retType]"""
     }
+
     def addDelegateMethods(valDef: ValDef, addToClass: ClassDef) = {
       def allMethodsInDelegate = computeType(valDef.tpt).declarations
-
       val ClassDef(mods, name, tparams, Template(parents, self, body)) = addToClass
 
-      // TODO better filtering - allow overriding
-      val existingMethods = body.flatMap(tree => tree match {
-        case DefDef(_, n, _, _, _, _) => Some(n)
-        case _ => None
-      }).toSet
-      val methodsToAdd = allMethodsInDelegate.filter(method => !existingMethods.contains(method.name))
+      // TODO  - better filtering - allow overriding  for all method selections
+      // TODO - use quasiquote extraction in case expressions
+      val existingMethods =
+        body.flatMap(tree => tree match {
+          case DefDef(_, n, _, _, _, _) => Some(n)    //case q"""def $n (...${_}):${_} = ${_}""" => Some(n)
+          case _                                 => None
+        }).toSet
 
-      val newMethods = for {
-        methodToAdd <- methodsToAdd
-      } yield {
-        val methodSymbol = methodToAdd.asMethod
-
-        val vparamss = methodSymbol.paramss.map(_.map {
-          paramSymbol => ValDef(
-            Modifiers(Flag.PARAM, tpnme.EMPTY, List()),
-            paramSymbol.name.toTermName,
-            TypeTree(paramSymbol.typeSignature),
-            EmptyTree)
+      def isAnExistingMethod(n:Name):Boolean = existingMethods.contains(n)
+      def bodyMethodFilter(defdef:Name => Boolean):List[Tree]  =
+        body.filter(tree => tree match {
+          case    DefDef(_,n, _, _, _, _) =>  defdef(n)
+          case    _                                =>   false
         })
-        /*
-        def wrappedMethodN(args:In *):Out =
-              new HystrixCommand[Out](SettingsInstance) {
-                         override protected def getFallback:Out = fallback() //() => Out
-                        override protected def run:Out               = unwrappedInstance.unwrappedMethodN(args)
-              }.queue.get
-         */
-        val  himport                      = q"""import com.netflix.hystrix.HystrixCommandProperties.ExecutionIsolationStrategy._"""
-        val args                            =  methodSymbol.paramss.flatMap(_.map(param => Ident(param.name)))
-        val delegateInvocationqq = q"""println("OMG!!"); ${valDef.name}.${ methodSymbol.name}(..$args)"""
-        val returnType                 = methodSymbol.returnType
-        val group                         = name.decoded
-        val command                   = methodSymbol.name.decoded
-        val hystrix                        = q"""$himport; new HystrixCommand[$returnType](HystrixConfigurator(${group},${command},THREAD)) {
-                                                                                                                                                    override protected def getFallback():$returnType = {println("INSIDE FALLBACK!!!!!!!!!!!!!") ; ${falbackValue(returnType)}}
-                                                                                                                                                    override protected def run():$returnType = $delegateInvocationqq}.queue.get """
-        // TODO - multi params list
 
-        val ret =
-          DefDef(Modifiers(),
-            methodSymbol.name,
-            List(), // TODO - type parameters
-            vparamss,
-            TypeTree(methodSymbol.returnType),
-            hystrix)
+      /**    Find and save the class PARAMACCESSOR declaration.
+        **   Compilation will fail otherwise. It must be re-inserted into the generated wrapper class
+        **/
+      val PARAMACCESSOR = scala.reflect.internal.Flags.PARAMACCESSOR.asInstanceOf[Long].asInstanceOf[FlagSet]
+      val paramaccessor        = body.filter(tree => tree match {
+        case ValDef(mods,_,_,_)  => mods.hasFlag(PARAMACCESSOR )
+        case _                              => false
+      })
 
-          println( show(ret))
+      /***  Remove methods  from wrapper class inherited from wrapped class - except for helper methods and definitely not the constructor (<init>) ***/
+      val newbod   = bodyMethodFilter(n => !isAnExistingMethod (n) || n.decoded == "<init>")
 
-          ret
+      /**  Gather up the fallback methods - methods declared in wrapper class with the same signatures as the wrapped trait **/
+      val fallbacks  = bodyMethodFilter( isAnExistingMethod )
+
+      /**  Try and find a fallback method body if declared. If not return a constant value depending on return type  **/
+      def getFallback(name:Name,returnType:Type) = {
+        val fallbackCandidate =
+          fallbacks.filter(defdef => {
+            val  DefDef(_,n, _, _, rt, _) = defdef
+            //TODO - check the method parameter types to check for overloaded methods
+            n == name  //&& rt.tpe == returnType
+          } )
+
+        if(fallbackCandidate.size == 1)  {
+          val   DefDef(_,_, _, _, _, rhs) =  fallbackCandidate.head
+          rhs
+        }
+        else
+          falbackValue(returnType)
       }
 
-      ClassDef(mods, name, tparams, Template(parents, self, body ++ newMethods))
+      val methodsToAdd = allMethodsInDelegate
+
+      val newMethods = for {
+        methodToInstrument <- methodsToAdd
+      } yield {
+        val methodSymbol = methodToInstrument.asMethod
+        val vparamss = methodSymbol.paramss.map(_.map {
+          paramSymbol =>
+            q"""val ${paramSymbol.name.toTermName}:${paramSymbol.typeSignature} """
+        })
+        /****
+                           def wrappedMethodN(args:In *):Out =
+                               new HystrixCommand[Out](SettingsInstance) {
+                                      override protected def getFallback:Out = fallback() //() => Out
+                                     override protected def run:Out               = unwrappedInstance.unwrappedMethodN(args)
+                            }.queue.get
+          ***/
+
+        val himport                 = q"""import com.netflix.hystrix.HystrixCommandProperties.ExecutionIsolationStrategy._"""
+        val args                      =  methodSymbol.paramss.flatMap(_.map(param => Ident(param.name)))
+        val methodInvocation = q"""println("OMG!!"); ${valDef.name}.${ methodSymbol.name}(..$args)"""
+        val returnType           = methodSymbol.returnType
+        val group                   = name.decoded
+        val mName                =  methodSymbol.name
+        val command             = methodSymbol.name.decoded
+        val hystrix                  = q"""$himport; new com.netflix.hystrix.HystrixCommand[$returnType](HystrixConfigurator(${group},${command},THREAD)) {
+                                                                                                     hystrix =>
+                                                                                                     override protected def getFallback():$returnType = {println("INSIDE FALLBACK!!!!!!!!!!!!!") ; ${getFallback(mName,returnType)}}
+                                                                                                     override protected def run():$returnType = $methodInvocation}.execute"""
+        // TODO - multi params list
+        val newret = q"""def ${methodSymbol.name.toTermName} (...$vparamss):$returnType = $hystrix """
+
+        //     println(newret)
+        newret
+      }
+
+      val classdef =  ClassDef(mods, name, tparams, Template(parents, self,  paramaccessor ++ newbod ++ newMethods))
+
+      println(classdef)
+
+      classdef
     }
 
     val inputs = annottees.map(_.tree).toList
@@ -117,4 +154,5 @@ object hystrixMacro {
     val outputs = expandees
     c.Expr[Any](Block(outputs, Literal(Constant(()))))
   }
+
 }

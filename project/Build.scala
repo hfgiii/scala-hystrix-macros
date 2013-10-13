@@ -1,13 +1,15 @@
 import sbt._
-import Keys._
+import sbt.Keys._
+
 
 object BuildSettings {
   val buildSettings = Defaults.defaultSettings ++ Seq(
     organization := "com.github.hfgiii.scala-hystrix-macros",
     version := "1.0.0",
     scalacOptions ++= Seq(),
-    scalaVersion := "2.10.2",
+    scalaVersion := "2.10.3",
     resolvers += Resolver.sonatypeRepo("snapshots"),
+    resolvers += "spray" at "http://repo.spray.io/",
     resolvers += Resolver.url("maven-remote", url("http://mvnrepository.com/")),
     addCompilerPlugin("org.scala-lang.plugins" % "macro-paradise" % "2.0.0-SNAPSHOT" cross CrossVersion.full)
   )
@@ -38,6 +40,9 @@ object MyBuild extends Build {
     "examples",
     file("examples"),
     settings = buildSettings  ++ Seq(
-      libraryDependencies += "com.netflix.hystrix" % "hystrix-core" % "1.2.16")
+      libraryDependencies += "com.netflix.hystrix" % "hystrix-core" % "1.2.16",
+      libraryDependencies += "com.typesafe.akka" %% "akka-actor" % "2.2.0-RC1",
+      libraryDependencies += "io.spray" % "spray-client" % "1.2-M8",
+      libraryDependencies += "io.spray" %% "spray-json" % "1.2.3")
   ) dependsOn(macros)
 }
