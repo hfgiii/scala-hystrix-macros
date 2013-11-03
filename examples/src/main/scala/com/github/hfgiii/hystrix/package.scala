@@ -7,8 +7,8 @@ import com.netflix.hystrix.HystrixCommandGroupKey.Factory._
 
 package object hystrix {
 
-  implicit def toHystrix(instance:ExampleApi):ExampleApiHystrixImpl       = new ExampleApiHystrixImpl(instance)
-  implicit def toHystrix(instance:GoogleApiCall):GoogleApiCallHystrixImpl = new GoogleApiCallHystrixImpl(instance)
+  implicit def toHystrix(instance:ExampleApi):ExampleApiHystrixImpl       = new ExampleApiHystrixImpl(instance)  {}
+  implicit def toHystrix(instance:GoogleApiCall):GoogleApiCallHystrixImpl = new GoogleApiCallHystrixImpl(instance) {}
 
   private implicit class HystrixConfig(config:Config) {
     def command   (key:String):String = config.getString("client_api.hystrix.command." + key)

@@ -11,6 +11,9 @@ Scala macros to generate Hystrix instrumentation for Scala/Java methods.
         override protected def getFallback:Out =  
            { println("INSIDE FALLBACK!!!!!!!!!!!!!") ; <fallback block> }
            
+        override protected def getCacheKey(): String = 
+           "uninstrumentedMethodN_OUT"
+           
         override protected def run:Out         =          
            { "println("OMG!!"); uninstrumentedInstance.uninstrumentedMethodN(args)}
            
@@ -26,8 +29,8 @@ Scala macros to generate Hystrix instrumentation for Scala/Java methods.
 * An example of the use of the *hystrix* macro is found in the [Example object](https://github.com/hfgiii/scala-hystrix-macros/blob/master/examples/src/main/scala/com/github/hfgiii/hystrix/ExampleRunner.scala). The following *implicit def* in the [*hystrix* package object](https://github.com/hfgiii/scala-hystrix-macros/blob/master/examples/src/main/scala/com/github/hfgiii/hystrix/package.scala) ,
   
   ```
-  implicit def toHystrix(instance:ExampleApi):ExampleApiHystrixImpl       = new ExampleApiHystrixImpl(instance)
-  implicit def toHystrix(instance:GoogleApiCall):GoogleApiCallHystrixImpl = new GoogleApiCallHystrixImpl(instance)
+  implicit def toHystrix(instance:ExampleApi):ExampleApiHystrixImpl       = new ExampleApiHystrixImpl(instance) {}
+  implicit def toHystrix(instance:GoogleApiCall):GoogleApiCallHystrixImpl = new GoogleApiCallHystrixImpl(instance) {}
  
   
   ``` 
@@ -36,30 +39,50 @@ Scala macros to generate Hystrix instrumentation for Scala/Java methods.
   ```
    import hystrix._
    
-   // Produces a instance of HystrixInstrumentedApi with UnInstrumentedApiImpl methods instrumented with Hystrix 
-   // Typing "instrumented" as "HystrixInstrumentedApi" forces the compiler to rely on "toHystrix" to generate
-   // the proper type-correct instantiation
+   // Produces a instance of HystrixInstrumentedApi with UnInstrumentedApiImpl methods
+   // instrumented with Hystrix. Typing "instrumented" as "HystrixInstrumentedApi" forces 
+   // the compiler to rely on "toHystrix" to generate the proper type-correct 
+   // instantiation
    //
   val original :ExampleApiHystrixImpl         = new ExampleApiNoHystrixImpl
   val googleApiCall: GoogleApiCallHystrixImpl = new GoogleApiCallNoHystrixImpl 
   ```
   
-  where, the *@hystrix* annotation appears in the declaration of *ExampleApiHystrixImpl* & *GoogleApiCallHystrixImpl*:
+  where, for example, the *@hystrix* annotation appears in the declaration of *GoogleApiCallHystrixImpl* class declaration:
 
-  ```
-    ExampleApiHystrixImpl(@hystrix wrapped: ExampleApi) extends ExampleApi {
-     ...
-    }
-  ``` 
-  and
  
   ```
-    class GoogleApiCallHystrixImpl(@hystrix wrapped: GoogleApiCall) extends GoogleApiCall {
-     ...
-    }
-  ``` 
+     object GoogleApiCallHystrixImpl {
 
- Though the current *hystrix* macro implementation can provide method fallback functions, which is a significent milestone, the next versions with strive to implement:
+        trait GoogleApiCallFallbackHystrix extends GoogleApiCall with FallbackFunctions {
+
+           def getMountEverestHight(): String =   
+             "0 meters"
+
+           def getDataFromLongRunningOperation(): String =   
+             "took a lotta seconds - in fallback"
+        }
+
+        trait GoogleApiCallCacheKeyHystrix extends GoogleApiCall with CacheKeyFunctions {
+
+          def getMountEverestHight(): String
+
+          def getDataFromLongRunningOperation(): String
+        }
+
+    }
+  
+    abstract class GoogleApiCallHystrixImpl(@hystrix wrapped: GoogleApiCall) extends GoogleApiCall  
+ ``` 
+ 
+Notice the *GoogleApiCallHystrixImpl* companion object. It contains two trait declarations: *GoogleApiCallFallbackHystrix* and *GoogleApiCallCacheKeyHystrix*. Both traits extends the *GoogleApiCall*, the base trait for the un-instrumented class, *ExampleApiNoHystrixImpl*. In addition, *GoogleApiCallFallbackHystrix* also extends *FallbackFunctions*, and *GoogleApiCallCacheKeyHystrix* also extends *CacheKeyFunctions*. 
+
+The *hystrix* macro looks for a trait/class in the companion object extending *FallbackFunctions*. The body of any method in the trait/class that overrides any method declared in the base trait for the un-instrumented class will become the body for the fallback function in the instrumented method with the same name during macro expansion.  
+
+The macro executes a similar algorithm for traits/classes extending *CacheKeyFunctions*. In this case, *hystrix* looks for the same method declarations but generates a *getCacheKey* method returning *String* cache key with the following format, *<method_name>_<return_type>*. If there is no method declaration, the generated *getCacheKey* method returns *null*. 
+
+
+ Though the current *hystrix* macro implementation can provide both method fallback functions and cache key functions, which is a significent milestone, the next versions with strive to implement:
 
   * Access to the *HystrixCommand* instance in the fallback block. This can provide better error logging if a runtime context does not monitor Hystrix Event Streams.
   * Compute *HystrixCommand* Settings during macro expansion not each time each time a instrumented method is invoked. 
